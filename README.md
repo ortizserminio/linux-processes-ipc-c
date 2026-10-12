@@ -1,5 +1,7 @@
 # Linux processes and IPC in C: parking simulations
 
+**English** · [Español](README.es.md)
+
 [![CI](https://github.com/ortizserminio/linux-processes-ipc-c/actions/workflows/ci.yml/badge.svg)](https://github.com/ortizserminio/linux-processes-ipc-c/actions/workflows/ci.yml)
 
 Two multi-process programs for Linux, written for the practical exams of *Sistemas Operativos* (Universidad Miguel Hernández, 2025/26). Both simulate a car park using only POSIX and System V primitives: `fork`, `wait`, pipes, shared memory (`shmget` / `shmat`) and semaphores (`semget` / `semop`). A Bash launcher and integration tests run in CI on Ubuntu.
@@ -31,11 +33,13 @@ Two multi-process programs for Linux, written for the practical exams of *Sistem
 
 ## Exam 2: four workers with global ordering (`parking-workers`)
 
-The parent reads a CSV of events (`second, priority, E|S, gate, plate`) and numbers them `seq = 1, 2, 3…`. It sends each event to one of **4 worker processes** (entry/exit × gate 0/1), each over its own pipe. Workers run in parallel, but the log must list events in exact `seq` order. This is solved with shared memory plus two semaphores:
+The parent reads a CSV of events (`second, priority, E|S, gate, plate`) and numbers them `seq = 1, 2, 3…`. It sends each event to one of **4 worker processes** (entry/exit × gate 0/1), each over its own pipe. Workers run in parallel, but the log must list events in exact `seq` order. This is solved with shared memory and semaphores:
 
 * `nextSeq`, in shared memory, is the next event allowed to proceed.
-* A worker takes the mutex and compares its event's `seq` with `*nextSeq`. If it is not its turn, it releases the mutex and blocks on `sCheckTurno`.
-* The worker whose turn it is updates the parking state, writes its CSV log line, increments `nextSeq`, releases the mutex, and **wakes the other workers** by signalling `sCheckTurno` `NUM_WORKERS − 1` times (a broadcast built from a counting semaphore). Each woken worker re-checks its turn.
+* A worker takes the mutex and compares its event's `seq` with `*nextSeq`. If it is not its turn, it sets its `esperando[i]` flag (still holding the mutex), releases the mutex and sleeps on **its own** semaphore `sTurno[i]`.
+* The worker whose turn it is updates the parking state, writes its CSV log line, increments `nextSeq` and, before releasing the mutex, **wakes every waiting worker**: it clears each set flag and signals that worker's semaphore. Each woken worker re-checks its turn.
+
+The exam statement prescribed a different wake-up, signalling one shared semaphore `NUM_WORKERS − 1` times. That version can deadlock (see below), so it was replaced after the exam.
 
 The result must match the instructor's reference log line for line, and the tests check exactly that.
 
@@ -61,6 +65,7 @@ The integration tests ([`tests/`](tests)) check:
 * **Exam 2**:
   - five runs whose log must be **identical to the instructor's reference** (scheduling differs between runs);
   - 200 generated events whose log must come out in sequence order 1..200;
+  - a **stress test** of 30 runs, each under `timeout`, so a deadlock fails the build instead of hanging it;
   - argument validation.
 
 **CI** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs both suites twice on Ubuntu, once with a plain `-O2` build and once with **AddressSanitizer + UndefinedBehaviorSanitizer**, and runs **ShellCheck** on the scripts.
@@ -70,8 +75,9 @@ The integration tests ([`tests/`](tests)) check:
 Each fix is in its own commit:
 
 * **Undefined behaviour in C:** the entry queue and the shared array of parked cars were compacted with `memcpy` from element `i+1` onto `i`. Source and destination overlap, which is undefined for `memcpy` (AddressSanitizer reports `memcpy-param-overlap`). Replaced with `memmove`.
+* **Deadlock in exam 2 (found by CI):** the turn-taking protocol in the exam statement "broadcasts" by signalling one shared semaphore `NUM_WORKERS − 1` times. A worker that is not next can wake up, re-check, block again and **steal a second signal**, leaving the worker whose turn it is asleep forever. It depends on scheduling: it never showed up in class or in the sanitizer build, but it hung the `-O2` build on GitHub's Linux runners. Fixed with an emulated condition variable: one semaphore per worker plus an `esperando[]` flag that is set and read under the mutex, so a wake-up can be neither lost nor stolen. A stress test now runs 200 events 30 times under `timeout`.
 * **Wrong metric in Bash:** "hours at full capacity" matched `4/4` anywhere in the log, including the per-entry `Ocupacion actualizada: 4/4` lines. It reported **6** hours instead of **2** (out of 13 ticks) on the exam example.
-* **Launcher robustness:** it did not create its output folder and divided by zero when no car entered.
+* **Launcher robustness:** it did not create its output folder, divided by zero when no car entered, and wrote blank input lines into gate 0's file (in Bash, `[[ "" -eq 0 ]]` is true). The last one was found by CI.
 
 ## Code provenance
 
@@ -80,7 +86,7 @@ These were exams with an instructor-provided skeleton, so part of each file is n
 | | Written by the instructor | Written by me |
 |---|---|---|
 | `parking-two-gates/parking.c`, `lanzar_parking.sh` | Skeleton, comments and helper functions | Everything inside the `TAREA n` blocks |
-| `parking-workers/parking.c` | Headers, structs, helpers marked `NO TOCAR`, comments | Everything between `BEGIN-TODO-n` and `END-TODO` |
+| `parking-workers/parking.c` | Headers, structs, helpers marked `NO TOCAR`, comments | Everything between `BEGIN-TODO-n` and `END-TODO`, plus the deadlock fix (marked *Post-exam fix*) |
 | `sem.c`, `sem.h`, `makefile`, `data/` | All (semaphore library, build file, example and reference data) | — |
 | `tests/`, `.github/`, this README | — | All |
 
