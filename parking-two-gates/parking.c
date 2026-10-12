@@ -115,13 +115,29 @@ int main(int argc, char *argv[]) {
     // TAREA 1 - Validación argumentos de entrada
 
     // TAREA 1.a - Comprobamos que el número de parámetros sea correcto.
-    ...
+    if (argc != 4) {
+        printf("ERROR: número incorrecto de parámetros.\n");
+        Sintaxis();
+        exit(ERROR_SALIDA);
+    }
 
     // TAREA 1.b
     // <capacidadTotal> es enteros positivos no nulo.
     // Comprobamos que es numérico, lo almacenamos en la variable "capacidad"
     // de tipo int y comprobamos que es mayor que cero.
-    ...
+    if (!esNumero(argv[3])) {
+        printf("ERROR: <capacidadTotal> debe ser entero no negativos.\n");
+        Sintaxis();
+        exit(ERROR_SALIDA);
+    }
+
+    capacidad = atoi(argv[3]);
+
+    if (capacidad <= 0) {
+        printf("ERROR: la capacidad total debe ser mayor que 0.\n");
+        Sintaxis();
+        exit(ERROR_SALIDA);
+    }
 
     // --- Fin de Comprobación de parámetros de entrada --------------------- //
 
@@ -193,7 +209,20 @@ int main(int argc, char *argv[]) {
     // Esta estructura almacena el estado global del parking.
     //
     // TAREA 2 - reserva de memoria compartida
-    ...
+    int shmId;
+    if (-1 == (shmId = shmget(
+                    ftok("./", SHMSEED),
+                    sizeof(struct ESTADO),
+                    IPC_CREAT | SHMPERMISOS
+    ))) {
+        perror("ERROR al crear la memoria compartida");
+        exit(ERROR_SALIDA);
+    }
+    estado = (struct ESTADO*)shmat(shmId, 0, 0); // memoria no comprobada
+    if (estado == (void*) -1) {
+        perror("ERROR al mapear la memoria compartida.\n");
+        exit(ERROR_SALIDA);
+    }
 
     // Inicializamos la memoria compartida
     // La capacidad del apparcamiento se ha recibido por argumento
@@ -204,7 +233,8 @@ int main(int argc, char *argv[]) {
     // Definimos e inicializamos el semáforo que garantiza la exclusion mutua
     // durante el acceso a la memoria compartida.
     // TAREA 3 - Inicialización del semaforo
-    ...
+    int sMutex;
+    sMutex = sCreate(SSEED, 1);
 
     // Inicialización de pipes pipes para la comunicación entre el padre
     // y los distintos hijos.
@@ -219,7 +249,17 @@ int main(int argc, char *argv[]) {
     //          - los datos de cada vehículo que llega a una de las entradas,
     //            comunicado exclusivamente al proceso de entrada
     //            correspondiente.
-    ...
+    for (int i=0; i<NUM_ENTRADAS; i++) {
+        if(-1 == pipe(p_sim_a_entrada[i])) {
+            perror("ERROR al crear pipes");
+            exit(ERROR_SALIDA);
+        }
+    }
+
+    if (-1 == pipe(p_sim_a_salida)) {
+        perror("ERROR al crear pipe_log");
+        exit(ERROR_SALIDA);
+    }
 
     // --- Fin de la sección de inicializaciones y preparativos ------------- //
 
@@ -227,17 +267,35 @@ int main(int argc, char *argv[]) {
 
     // TAREA 5 - Labores de inicio del proceso Salida
     // 5.a Lanzamos la ejecución del proceso Salida
-    ...
+    if (-1 == (pid_salida = fork())) {
+        perror("ERROR en fork de salida");
+        exit(ERROR_SALIDA);
+    }
 
     // 5.b Ejecutamos la función correspondiente al proceso Salida
-    ...
+    if (pid_salida == 0) {
+        proceso_salida(p_sim_a_salida, estado, sMutex);
+        es_hijo = 1;
+    }
 
     // TAREA 6 - Labores de inicio de los procesos Entrada
     // 6.a Lanzamos la ejecución de los procesos de Entradas
-    ...
+    for (int i=0; i<NUM_ENTRADAS; i++) {
+        if (!es_hijo) {
+            if (-1 == (pid_entrada[i] = fork())) {
+                char msg[BUF_SIZE];
+                snprintf(msg, sizeof(msg), "ERROR en fork de entrada %d.\n", i);
+                perror(msg);
+                exit(ERROR_SALIDA);
+            }
 
     // 6.b Ejecutamos la función correspondiente a los procesos Entrada
-    ...
+            if (pid_entrada[i] == 0) {
+                proceso_entrada(i, p_sim_a_entrada[i], estado, sMutex);
+                es_hijo = 1;
+            }
+        }
+    }
 
     // --- Fin de la ejecución de procesos hijos ---------------------------- //
 
@@ -247,7 +305,10 @@ int main(int argc, char *argv[]) {
 
         // cierra extremos de pipes no usados y lanza la simulación
 	    // TAREA 7 - Cierre de pipes no utilizados por el padre
-        ...
+        for (int i=0; i<NUM_ENTRADAS; i++) {
+             close(p_sim_a_entrada[i][0]);
+        }
+        close(p_sim_a_salida[0]);
 
         // Bucle de simulación de tiempo.
         // Un bucle hace avanzar el instante temporal de 1 en 1 partiendo de
@@ -258,7 +319,10 @@ int main(int argc, char *argv[]) {
 
 	        // TAREA 8 - Envio de la marca (instante) temporal actual a cada
             //      proceso hijo via pipe.
-            ...
+            for (int i=0; i<NUM_ENTRADAS; i++) {
+                write(p_sim_a_entrada[i][1], &t, sizeof(int));
+            }
+            write(p_sim_a_salida[1], &t, sizeof(int));
 
             // El proceso padre notifica a las entradas de los vehículos que
             // llegan en el instante actual.
@@ -275,14 +339,20 @@ int main(int argc, char *argv[]) {
                 }
                 // TAREA 9 - Envio via pipe del número de vehículos que llegan
                 //      a cada entrada en ese instante.
-                ...
+                write(p_sim_a_entrada[j][1], &num_llegadas_ciclo, sizeof(int));
 
                 // TAREA 10 - Como las entradas ya saben cuantos vehículos llegan,
                 //      el proceso padre envía la información de cada uno
                 //      de esos vehículos a la entrada correspondiente.
                 //      El envio es de una estructura de tipo VEHICULO
                 //      y se hace mediante pipe.
-                ...
+                for (int i=0; i<num_llegadas_ciclo; i++) {
+                    write(
+                        p_sim_a_entrada[j][1],
+                        &accesos_entrada[j][llegadas_ciclo[i]],
+                        sizeof(struct VEHICULO)
+                    );
+                }
 
             }
 
@@ -294,13 +364,22 @@ int main(int argc, char *argv[]) {
         // Marcamos fin de simulación enviando el instante temporal -1 a todos
         // los procesos hijos.
 	    // TAREA 11 - Notificación de fin de ejecución via pipe.
-        ...
+        hora_inicial = -1;
+        for (int i=0; i<NUM_ENTRADAS; i++) {
+            write(p_sim_a_entrada[i][1], &hora_inicial, sizeof(int));
+        }
+        write(p_sim_a_salida[1], &hora_inicial, sizeof(int));
 
 	    // TAREA 12 - Cierre de los pipes restantes
-        ...
+        for (int i=0; i<NUM_ENTRADAS; i++) {
+             close(p_sim_a_entrada[i][1]);
+        }
+        close(p_sim_a_salida[1]);
 
 	    // TAREA 13 - Liberación de memoria compartida y destrucción del semáforo.
-        ...
+        shmdt(estado);
+        shmctl(shmId, IPC_RMID, 0);
+        sDestroy(sMutex);
     }
 
     // --- Fin del código exclusivo del padre ------------------------------- //
@@ -314,7 +393,9 @@ int main(int argc, char *argv[]) {
 
     // El padre espera a que terminen los hijos.
     // TAREA 14 - Garantizar el fin de todos los procesos hijos
-    ...
+    for (int i=0; i<NUM_ENTRADAS+1; i++) {
+        wait(NULL);
+    }
 
     return 0;
 
@@ -400,11 +481,11 @@ void imprimir_estado_aparcamiento(int hora, struct ESTADO *estado, int sMutex) {
     printf("[T=%d]\t ", hora);
     fflush(stdout);
     // TAREA 15.a - Reservamos el acceso a la memoria compartida.
-    ...
+    sWait(sMutex);
     printf("ocupacion=%d/%d.\n", estado->ocupacion, estado->capacidad);
     fflush(stdout);
     // TAREA 15.b - Liberamos el acceso a la memoria compartida.
-    ...
+    sSignal(sMutex);
 }
 
 
@@ -433,20 +514,20 @@ void proceso_entrada(
     int error = 0;
 
     // TAREA 16 - Cierre de extremos de pipes innecesarios.
-    ...
+    close(pipe_sim_a_puerta[1]);
 
     for (;;) {
         // TAREA 17 - Recibe via pipe el entero que representa la hora actual.
-        ...
+        read(pipe_sim_a_puerta[0], &hora, sizeof(int));
         // Comprobamos el final de la simulación.
         if (hora == -1){
             return;
         }
         // TAREA 18 - Recibe via pipe el número de coches que llegan a esta hora.
-        ...
+        read(pipe_sim_a_puerta[0], &llegadas, sizeof(int));
         for (int i=0; i<llegadas; i++) {
             // TAREA 19 - Recibe todos esos coches uno a uno (estructura VEHICULO).
-            ...
+            read(pipe_sim_a_puerta[0], &cola[num_en_cola], sizeof(struct VEHICULO));
             // Compruebamos que la hora de llegada almacenada en la estructura
             // es correcta (corresponde con el instante actual).
             if (cola[num_en_cola].llegada != hora) {
@@ -466,7 +547,7 @@ void proceso_entrada(
 
         // Procesamos la cola si el acceso es posible.
         // TAREA 20 - Reservamos el acceso a la memoria compartida.
-        ...
+        sWait(sMutex);
         // Calculamos cuantas plazas libres hay en el aparcamiento.
         libre = estado->capacidad - estado->ocupacion;
         // Mientras queden plazas libres, dejamos pasar vehículos uno a uno.
@@ -516,14 +597,14 @@ void proceso_entrada(
             fflush(stdout);
         }
         // TAREA 21 - Liberamos el acceso a la memoria compartida.
-        ...
+        sSignal(sMutex);
 
         // 0.1 segundos
         usleep(100000);
     }
 
     // TAREA 22 - Cierre de los extremos de pipes restantes.
-    ...
+    close(pipe_sim_a_puerta[0]);
 }
 
 // Proceso de gestión de salida de vehiculos.
@@ -537,11 +618,11 @@ void proceso_salida(
     int hora;
 
     // TAREA 23 - Cierre de extremos de pipes innecesarios.
-    ...
+    close(pipe_sim_a_salida[1]);
 
     for (;;) {
         // TAREA 24 - Recibe via pipe el entero que representa la hora actual.
-        ...
+        read(pipe_sim_a_salida[0], &hora, sizeof(int));
         // Comprobamos el final de la simulación.
         if (hora == -1) {
             return;
@@ -549,7 +630,7 @@ void proceso_salida(
 
         // TAREA 25 - Reservamos el acceso al estado compartido del aparcamiento
         // para dar salida a los coches.
-        ...
+        sWait(sMutex);
         // Comprobamos uno a uno los vehículos aparcados para comprobar
         // si alguno quiere salir a esta hora.
         for (int i=0; i<estado->ocupacion; i++) {
@@ -580,13 +661,13 @@ void proceso_salida(
             }
         }
         // TAREA 26 - Liberamos el acceso a la memoria compartida.
-        ...
+        sSignal(sMutex);
 
         // 0.1 segundos
         usleep(100000);
     }
 
     // TAREA 27 - Cierre de los extremos de pipes restantes.
-    ...
+    close(pipe_sim_a_salida[0]);
 }
 

@@ -51,17 +51,33 @@ CheckArguments() {
 #----------------------------------
 
     # Comprobamos que el número de parámetros es 3.
-    ...
+    if [ "$#" -ne 3 ]; then
+        echo "ERROR: número incorrecto de parámetros."
+        Sintaxis
+        exit 1
+    fi
 
     # Comprobamos que el primer parámetro es un fichero existente.
-    ...
+    if [ ! -f "$1" ]; then
+        echo "ERROR: el parámetro <ficheroCoches> debe ser un fichero existente."
+        Sintaxis
+        exit 1
+    fi
 
     # Comprobamos que el segundo parámetro es numérico.
-    ...
+    if ! Number "$2"; then
+        echo "ERROR: el parámetro <capacidadTotal> ($2) debe ser un número entero."
+        Sintaxis
+        exit 1
+    fi
 
     # Comprobamos rangos lógicos: el argumento numérico es estrictamente
     # mayor que 0.
-    ...
+    if [ "$2" -le 0 ]; then
+        echo "ERROR: <capacidadTotal> debe ser mayor que 0."
+        Sintaxis
+        exit 1
+    fi
 }
 
 # Programa principal
@@ -71,12 +87,12 @@ CheckArguments() {
 # Comprobación de argumentos y asignacion de variables.
 #----------------------------------
 # Comprobamos los argumentos con la función previamente implementada
-...
+CheckArguments "$@"
 
 # Asignamos los argumentos de entrada a variables mas cómodas
-ficheroCoches=...
-capacidad=...
-ficheroLog=...
+ficheroCoches="$1"
+capacidad="$2"
+ficheroLog="$3"
 
 # Definimos los archivos de salida para cada puerta de entrada
 archivoEntrada0="accesos/entrada_0.txt"
@@ -92,7 +108,20 @@ archivoEntrada1="accesos/entrada_1.txt"
 # Procesar el archivo de accesos ($archivoCoche) y generar los archivos
 # de cada entrada ($archivoEntrada0 y $archivoEntrada1).
 #----------------------------------
-...
+# Version con awk
+# awk -F '\t' '$2==1 { printf "%s\t%d\t%d\n", $1, $3, $4 }' "$ficheroCoches" > "$archivoEntrada0"
+# awk -F '\t' '$2==2 { printf "%s\t%d\t%d\n", $1, $3, $4 }' "$ficheroCoches" > "$archivoEntrada1"
+# Leyendo el archivo linea a linea
+> $archivoEntrada0
+> $archivoEntrada1
+while IFS=$'\t' read -r col1 col2 col3 col4; do
+    if [[ "$col2" -eq 0 ]]; then
+        echo -e "$col1\t$col3\t$col4" >> $archivoEntrada0
+    fi
+    if [[ "$col2" -eq 1 ]]; then
+        echo -e "$col1\t$col3\t$col4" >> $archivoEntrada1
+    fi
+done < "$ficheroCoches"
 
 # Lanzamos el programa en C (parking) y
 # almacenamos su salida estándar al fichero de log indicado por el usuario.
@@ -101,7 +130,7 @@ archivoEntrada1="accesos/entrada_1.txt"
 # Ejecución del programa en C y captura de su salida en el fichero indicado.
 #----------------------------------
 echo "Lanzando simulación del parking..."
-...
+./parking "$archivoEntrada0" "$archivoEntrada1" "$capacidad" > "$ficheroLog"
 
 # A partir de la salida del programa "parking" en C ($ficheroLog),
 # obtenemos los siguientes datos:
@@ -111,8 +140,8 @@ echo "Lanzando simulación del parking..."
 #----------------------------------
 
 # - el número de horas (instantes temporales) en los que el aparcamiento ha estado lleno
-horas_lleno=... # número de horas que ha estado a máxima ocupación el aparcamiento
-max_horas=...   # número totales de horas que ha estado en funcionamiento
+horas_lleno=$(grep "$capacidad/$capacidad" $ficheroLog | wc -l)
+max_horas=$(grep ocupacion $ficheroLog | wc -l)
 echo "El aparcamiento ha estado al máximo de su capacidad durante $horas_lleno horas de las $max_horas."
 
 # - la espera media para entrar
@@ -120,9 +149,16 @@ echo "El aparcamiento ha estado al máximo de su capacidad durante $horas_lleno 
 #       necesaria.
 #       El resto de variables son propuestas para guiar la implementación.
 #       Es posible que sean necesarias más lineas de código de las presentadas.
-horas_entrada=... # array de horas de entrada de cada vehiculo
-horas_salida=...  # array de horas de salida de cada vehiculo
-diferencias=...   # array de diferencias temporales entre la entrada y la salida
-media=...
+horas_entrada=($(grep "entrado" $ficheroLog | cut -d ] -f1 | cut -d = -f2))
+horas_salida=($(grep "entrado" $ficheroLog | cut -d "=" -f3 | cut -d ' ' -f1))
+diferencias=()
+for ((i=0; i<${#horas_entrada[@]}; i++)); do
+    diferencias[$i]=$((horas_entrada[i] - horas_salida[i]))
+done
+suma=0
+for val in "${diferencias[@]}"; do
+    suma=$((suma+val))
+done
+media=$(echo "scale=2; $suma / ${#diferencias[@]}" | bc)
 echo "El tiempo medio de espera para entrar al aparcamiento ha sido de $media horas."
 
