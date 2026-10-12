@@ -1,0 +1,10 @@
+# Build output
+*.o
+*.gch
+parking-two-gates/parking
+parking-workers/parking
+
+# Runtime output
+*.log
+accesos/
+log.csv
