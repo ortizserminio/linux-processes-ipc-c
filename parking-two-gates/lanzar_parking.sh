@@ -116,6 +116,11 @@ mkdir -p "$(dirname "$archivoEntrada0")" "$(dirname "$archivoEntrada1")"
 : > "$archivoEntrada0"
 : > "$archivoEntrada1"
 while IFS=$'\t' read -r col1 col2 col3 col4; do
+    # Skip blank lines: [[ "" -eq 0 ]] is true in Bash, so an empty gate
+    # field would otherwise be written to gate 0's file.
+    if [[ -z "$col1" || -z "$col2" ]]; then
+        continue
+    fi
     if [[ "$col2" -eq 0 ]]; then
         echo -e "$col1\t$col3\t$col4" >> "$archivoEntrada0"
     fi
