@@ -584,7 +584,8 @@ void proceso_entrada(
             // Retiramos el vehículo que ha entrado de la cola de acceso.
             // Estamos utilizando un array estático como cola, así que copiamos
             // todos los vehículos restantes al principio del array.
-            memcpy(&cola[0], &cola[1], num_en_cola * sizeof(struct VEHICULO));
+            // memmove, not memcpy: source and destination overlap.
+            memmove(&cola[0], &cola[1], num_en_cola * sizeof(struct VEHICULO));
 
             // Un mensaje del estado del parking.
             printf(
@@ -650,7 +651,8 @@ void proceso_salida(
                 // Al tratarse de una cola implementada en un array,
                 // desplazamos toda la memoria desde la posición siguiente a
                 // ese vehículo, una posición hacia atrás.
-                memcpy(
+                // memmove, not memcpy: source and destination overlap.
+                memmove(
                     &estado->plazas[i],
                     &estado->plazas[i+1],
                     (estado->ocupacion-i-1)*sizeof(struct VEHICULO)
