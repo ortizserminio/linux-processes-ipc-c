@@ -97,11 +97,16 @@ int workerPipes[NUM_WORKERS][2]; // fd[0] : lectura.  fd[1] escritura
 
 // Declaramos los descriptores de los semaforos globales, para poder usarlos en CodigoWorker. Hay que crearlos en el main
 int sMutex;
-int sCheckTurno;
+// Post-exam fix: one private wake-up semaphore per worker instead of a
+// shared sCheckTurno "broadcast" (see the waiting loop in CodigoWorker).
+int sTurno[NUM_WORKERS];
 
 // Declaramos los punteros a memoria compartida como globales, pero hay que vincularlos en el Main.
 struct ESTADO_PARKING *estadoParking = NULL;
 int *nextSeq = NULL;
+// esperando[i] == 1 while worker i is blocked waiting for its turn.
+// Lives in the same shared segment as nextSeq (nextSeq[1..NUM_WORKERS]).
+int *esperando = NULL;
 
 FILE *fdLogFile; //Descriptor de fichero para el fichero de log.
 //-------------------------------------------------------------------------------------------------
@@ -264,11 +269,20 @@ void CodigoWorker(int idxPipe){
 
             // Comienzo el bucle de comprobación y espera. 
             while( msg.seq != (*nextSeq) ){
+                // Post-exam fix (deadlock): the original version blocked on a
+                // shared sCheckTurno semaphore that the finishing worker
+                // signalled NUM_WORKERS-1 times. A worker that was not next
+                // could wake up, re-check, block again and consume another
+                // of those signals, so the worker whose turn it was could
+                // stay blocked forever. Now each worker marks itself as
+                // waiting while it still holds the mutex and sleeps on its
+                // own semaphore, so no wake-up can be lost or stolen.
+                esperando[idxPipe] = 1;
                 // liberamos el mutex a memoria compartida
                 sSignal(sMutex); 
-                // Me cuelgo a la espera de ser liberado por el broadcast en el semáforo sCheckTurno
-                sWait(sCheckTurno); 
-                // Me han liberado y voy a intentar obtener de nuevo el munex para volver al while donde compruebo de nuevo si es mi turno
+                // Me cuelgo en mi propio semáforo hasta que alguien avance nextSeq
+                sWait(sTurno[idxPipe]); 
+                // Me han liberado y voy a intentar obtener de nuevo el mutex para volver al while donde compruebo de nuevo si es mi turno
                 sWait(sMutex); 
             }
         // END-TODO **********************************************************************
@@ -329,6 +343,16 @@ void CodigoWorker(int idxPipe){
                                 msg.seq, msg.seg, msg.tipo, msg.puerta, msg.matricula, plazasLibres, estadoParking->ocupacion, "OK");
             fflush(fdLogFile); 
 
+            // Wake every worker that is waiting (still under the mutex, so
+            // the esperando[] flags cannot change meanwhile). Each one
+            // re-checks whether it is now its turn.
+            for (int i=0; i<NUM_WORKERS; i++){
+                if (esperando[i]) {
+                    esperando[i] = 0;
+                    sSignal(sTurno[i]);
+                }
+            }
+
             // El worker libera el sMutex de acceso a memoria compartida
             sSignal(sMutex);
         // END-TODO **********************************************************************
@@ -337,9 +361,8 @@ void CodigoWorker(int idxPipe){
             // Ya hemos actualizado el estado y logueado el evento.
             // Ahora liberamos con un "broadcast" a los workers (haciendo tantos signals como otros workers hay).
             // Asi, aquel que tenga el seq == nextSeq continuará, y el resto se volverá a bloquear a la espera de su turno.
-            for (int i=0; i<NUM_WORKERS-1; i++){
-                sSignal(sCheckTurno);
-            }
+            // (Post-exam fix: the waiting workers are now woken in TODO-4,
+            // inside the mutex; the shared broadcast was removed.)
         // END-TODO **********************************************************************
     } 
 }
@@ -436,7 +459,7 @@ int main(int argc, char *argv[]) {
         }
 
         // Declaramos el id de memoria compartida para albergar el valor de siguiente secuencia, que es un entero. Comprobamos creación y mensaje error si procede (usar PrintError)
-        int shmIdNextSeq = shmget( ftok("./", SHMSEED+1), sizeof(int), IPC_CREAT | SHMPERMISOS );
+        int shmIdNextSeq = shmget( ftok("./", SHMSEED+1), (1 + NUM_WORKERS) * sizeof(int), IPC_CREAT | SHMPERMISOS );
         if (shmIdNextSeq == -1 ) {
             PrintError(ERR_SHMID);
             exit(ERROR);
@@ -462,6 +485,11 @@ int main(int argc, char *argv[]) {
 
         // Inicializamos la variable compartida nextSeq con valor 1 (siguiente evento (seq) a procesar). tener en cuenta que nextSeq es un puntero (int *)
         *nextSeq = 1; 
+        // Post-exam fix: waiting flags live right after nextSeq.
+        esperando = nextSeq + 1;
+        for (int i=0; i<NUM_WORKERS; i++){
+            esperando[i] = 0;
+        }
     // END-TODO **********************************************************************
 
     //begin-log
@@ -483,7 +511,10 @@ int main(int argc, char *argv[]) {
 
         // Creamos el semaforo de bloqueo sCheckTurno para bloquear al worker en espera para comprobar si es su turno.
         // Lo inicializamos de forma correcta para que surta efecto el bloqueo.
-        sCheckTurno = sCreate(SSEED+1, 0);
+        // Post-exam fix: one private semaphore per worker, initialised to 0.
+        for (int i=0; i<NUM_WORKERS; i++){
+            sTurno[i] = sCreate(SSEED+1+i, 0);
+        }
     // END-TODO **********************************************************************
 
     //---------------------------------------------------------------------------------------------
@@ -713,7 +744,9 @@ int main(int argc, char *argv[]) {
         
         //Destruimos los semáforos sMutex y sCheckTurno
         sDestroy(sMutex);
-        sDestroy(sCheckTurno);
+        for (int i=0; i<NUM_WORKERS; i++){
+            sDestroy(sTurno[i]);
+        }
     // END-TODO **********************************************************************
 
     //Destruimos el semaforor de consola
