@@ -8,6 +8,7 @@ jobs:
   test:
     name: Build and integration tests (${{ matrix.build }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:

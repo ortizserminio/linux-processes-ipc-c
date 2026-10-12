@@ -17,8 +17,8 @@ trap 'rm -rf "$work"' EXIT
 # --- matches the instructor's reference output -----------------------------
 for run in 1 2 3 4 5; do   # repeated: process scheduling differs per run
     ipc_before=$(ipc_count)
-    ./parking data/eventos_profesor.csv "$work/log.csv" > "$work/stdout.txt"
-    status=$?
+    timeout 30 ./parking data/eventos_profesor.csv "$work/log.csv" > "$work/stdout.txt"
+    status=$?   # 124 means it hung and was killed by timeout
     check "run $run: exits with 0" [ "$status" -eq 0 ]
     check "run $run: log identical to the instructor's reference" \
           diff -q data/log_profesor.csv "$work/log.csv"
@@ -36,11 +36,19 @@ awk 'BEGIN {
         t += int(rand() * 50) + 1; printf "%d,0,S,%d,%s\n", t, int(rand() * 2), plate;
     }
 }' > "$work/events.csv"
-./parking "$work/events.csv" "$work/big.csv" > /dev/null
+timeout 30 ./parking "$work/events.csv" "$work/big.csv" > /dev/null
+check "200 events: finishes (no deadlock)" [ $? -eq 0 ]
 check "200 events: one log line per event" [ "$(wc -l < "$work/big.csv")" -eq 200 ]
 check "200 events: log is in sequence order 1..200" \
       diff -q <(cut -d, -f1 "$work/big.csv") <(seq 1 200)
 check "200 events: occupancy ends at 0" [ "$(tail -1 "$work/big.csv" | cut -d, -f7)" -eq 0 ]
+
+# --- stress: repeated runs to expose scheduling-dependent deadlocks ------
+hangs=0
+for run in $(seq 1 30); do
+    timeout 30 ./parking "$work/events.csv" "$work/stress.csv" > /dev/null || hangs=$((hangs + 1))
+done
+check "stress: 30 runs of 200 events, none hangs ($hangs hung)" [ "$hangs" -eq 0 ]
 
 # --- argument validation ---------------------------------------------------
 expect_exit 1 "rejects missing arguments"         ./parking data/eventos_profesor.csv
