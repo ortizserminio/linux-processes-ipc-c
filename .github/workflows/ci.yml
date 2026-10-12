@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Build and integration tests (${{ matrix.build }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - build: plain
+            cflags: "-I. -Wall -O2"
+          - build: sanitizers
+            # AddressSanitizer catches invalid memory access (e.g. memcpy on
+            # overlapping buffers); UBSan catches undefined behaviour.
+            cflags: "-I. -Wall -g -fno-omit-frame-pointer -fsanitize=address,undefined"
+    env:
+      CFLAGS: ${{ matrix.cflags }}
+      ASAN_OPTIONS: "detect_leaks=0:halt_on_error=1"
+      UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exam 1 - two gates
+        run: bash tests/test_parking_two_gates.sh
+      - name: Exam 2 - four workers
+        run: bash tests/test_parking_workers.sh
+
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck --severity=warning parking-two-gates/lanzar_parking.sh tests/*.sh
