@@ -67,13 +67,17 @@ expect_exit 1 "rejects arrivals out of order" ./parking "$work/unsorted.txt" "$w
 # --- launcher script -------------------------------------------------------
 cp parking lanzar_parking.sh data/entrada_vehiculos.txt "$work/"
 (
-    cd "$work" || exit 1
-    mkdir -p accesos
+    cd "$work" || exit 1   # no accesos/ folder: the script must create it
     ./lanzar_parking.sh entrada_vehiculos.txt 4 out.log > script.out 2>&1
 ) ; status=$?
 check "launcher: runs successfully" [ "$status" -eq 0 ]
 check "launcher: reports hours at full capacity" grep -q "capacidad durante" "$work/script.out"
 check "launcher: reports the mean waiting time" grep -q "tiempo medio de espera" "$work/script.out"
+# Full hours must count only the per-tick status lines ("ocupacion=4/4"),
+# not the "Ocupacion actualizada: 4/4" lines printed on each entry.
+full_ticks=$(grep -c "ocupacion=4/4" "$work/out.log")
+check "launcher: full-capacity hours counted per tick ($full_ticks)" \
+      grep -q "capacidad durante $full_ticks horas" "$work/script.out"
 check "launcher: splits the input per gate" \
       [ "$(wc -l < "$work/accesos/entrada_0.txt")" -eq 4 ]
 expect_exit 1 "launcher: rejects wrong argument count" "$work/lanzar_parking.sh" a b

@@ -112,14 +112,15 @@ archivoEntrada1="accesos/entrada_1.txt"
 # awk -F '\t' '$2==1 { printf "%s\t%d\t%d\n", $1, $3, $4 }' "$ficheroCoches" > "$archivoEntrada0"
 # awk -F '\t' '$2==2 { printf "%s\t%d\t%d\n", $1, $3, $4 }' "$ficheroCoches" > "$archivoEntrada1"
 # Leyendo el archivo linea a linea
-> $archivoEntrada0
-> $archivoEntrada1
+mkdir -p "$(dirname "$archivoEntrada0")" "$(dirname "$archivoEntrada1")"
+: > "$archivoEntrada0"
+: > "$archivoEntrada1"
 while IFS=$'\t' read -r col1 col2 col3 col4; do
     if [[ "$col2" -eq 0 ]]; then
-        echo -e "$col1\t$col3\t$col4" >> $archivoEntrada0
+        echo -e "$col1\t$col3\t$col4" >> "$archivoEntrada0"
     fi
     if [[ "$col2" -eq 1 ]]; then
-        echo -e "$col1\t$col3\t$col4" >> $archivoEntrada1
+        echo -e "$col1\t$col3\t$col4" >> "$archivoEntrada1"
     fi
 done < "$ficheroCoches"
 
@@ -140,8 +141,8 @@ echo "Lanzando simulación del parking..."
 #----------------------------------
 
 # - el número de horas (instantes temporales) en los que el aparcamiento ha estado lleno
-horas_lleno=$(grep "$capacidad/$capacidad" $ficheroLog | wc -l)
-max_horas=$(grep ocupacion $ficheroLog | wc -l)
+horas_lleno=$(grep -c "ocupacion=$capacidad/$capacidad" "$ficheroLog")
+max_horas=$(grep -c "ocupacion=" "$ficheroLog")
 echo "El aparcamiento ha estado al máximo de su capacidad durante $horas_lleno horas de las $max_horas."
 
 # - la espera media para entrar
@@ -149,8 +150,8 @@ echo "El aparcamiento ha estado al máximo de su capacidad durante $horas_lleno 
 #       necesaria.
 #       El resto de variables son propuestas para guiar la implementación.
 #       Es posible que sean necesarias más lineas de código de las presentadas.
-horas_entrada=($(grep "entrado" $ficheroLog | cut -d ] -f1 | cut -d = -f2))
-horas_salida=($(grep "entrado" $ficheroLog | cut -d "=" -f3 | cut -d ' ' -f1))
+mapfile -t horas_entrada < <(grep "entrado" "$ficheroLog" | cut -d ] -f1 | cut -d = -f2)
+mapfile -t horas_salida < <(grep "entrado" "$ficheroLog" | cut -d "=" -f3 | cut -d ' ' -f1)
 diferencias=()
 for ((i=0; i<${#horas_entrada[@]}; i++)); do
     diferencias[$i]=$((horas_entrada[i] - horas_salida[i]))
@@ -159,6 +160,10 @@ suma=0
 for val in "${diferencias[@]}"; do
     suma=$((suma+val))
 done
-media=$(echo "scale=2; $suma / ${#diferencias[@]}" | bc)
+if [ "${#diferencias[@]}" -gt 0 ]; then
+    media=$(echo "scale=2; $suma / ${#diferencias[@]}" | bc)
+else
+    media=0
+fi
 echo "El tiempo medio de espera para entrar al aparcamiento ha sido de $media horas."
 
